@@ -9,10 +9,12 @@
 #define COLUMN_EMAIL_SIZE 255
 #define size_of_attribute(Struct, Attribute) sizeof(((Struct*)0)->Attribute)
 #define TABLE_MAX_PAGES 100
+
+//the +1 is needed because C strings are expected to end with null character
 typedef struct {
     uint32_t id;
-    char username[COLUMN_USERNAME_SIZE];
-    char email[COLUMN_EMAIL_SIZE];
+    char username[COLUMN_USERNAME_SIZE + 1];
+    char email[COLUMN_EMAIL_SIZE + 1];
 } Row;
 
 // should change to #define instead of const?
@@ -28,7 +30,7 @@ typedef struct {
 #define ROWS_PER_PAGE (PAGE_SIZE/ROW_SIZE)
 #define TABLE_MAX_ROWS  (ROWS_PER_PAGE * TABLE_MAX_PAGES)
 
-//https://cstack.github.io/db_tutorial/parts/part4.html
+
 
 typedef struct{
     uint32_t num_rows;
@@ -43,8 +45,9 @@ typedef enum{
 
 typedef enum{
     PREPARE_SUCCESS,
-    PREPARE_UNRECOGNIZED_STATEMENT,
-    PREPARE_SYNTAX_ERROR
+    PREPARE_STRING_TO_LONG,
+    PREPARE_SYNTAX_ERROR,
+    PREPARE_UNRECOGNIZED_STATEMENT
 } PrepareResult;
 
 typedef enum{
@@ -107,17 +110,36 @@ void deserialize_row(void *source, Row *destination){
     memcpy(&(destination->email), source + EMAIL_OFFSET, EMAIL_SIZE);
 }
 
+PrepareResult prepare_insert(InputBuffer *input_buffer, Statement *statement){
+    statement->type = STATEMENT_INSERT;
+
+    //this works because strtok maintains a static points to the last point
+    //it stopped, so when we use NULL it will continue in the point it 
+    //stopped in the previous string.
+    char *keyword = strtok(input_buffer->buffer, " ");
+    char *id_string = strtok(NULL, " ");
+    char *username = strtok(NULL, " ");
+    char* email = strtok(NULL, " ");
+
+    if(id_string == NULL || username == NULL || email == NULL){
+        return PREPARE_SYNTAX_ERROR;
+    }
+    int id = atoi(id_string);
+    if(strlen(username) > COLUMN_USERNAME_SIZE){
+        return PREPARE_STRING_TO_LONG;
+    }
+    statement->row_to_insert .id = id;
+    strcpy(statement->row_to_insert.username, username);
+    strcpy(statement->row_to_insert.email, email);
+
+    return PREPARE_SUCCESS;
+}
+
 PrepareResult prepare_statement(InputBuffer *input_buffer, Statement *statement){
     //use strncmp in this case because insert will be followed by more data
     if(strncmp(input_buffer->buffer, "insert", 6) == 0){
         statement->type = STATEMENT_INSERT;
-        //read arguments
-        int args_assigned = sscanf(input_buffer->buffer, "insert %d %s %s",
-            &(statement->row_to_insert.id), statement->row_to_insert.username, statement->row_to_insert.email);
-        if(args_assigned < 3){
-            return PREPARE_SYNTAX_ERROR;
-        }
-        return PREPARE_SUCCESS;
+        return prepare_insert(input_buffer, statement);
     }
     if(strcmp(input_buffer->buffer, "select") == 0){
         statement->type = STATEMENT_SELECT;
@@ -274,14 +296,18 @@ int main(int argc, char *argv[])
       Statement statement;
       switch (prepare_statement(input_buffer, &statement))
       {
-        case PREPARE_SUCCESS:
+        case (PREPARE_SUCCESS):
             break;
-        case PREPARE_SYNTAX_ERROR:
+        case (PREPARE_SYNTAX_ERROR):
             printf("Syntax error. Could not parse statement. \n");
             continue;
-        case PREPARE_UNRECOGNIZED_STATEMENT:
+        case (PREPARE_STRING_TO_LONG):
+            printf("String is too long. \n");
+            continue;
+        case (PREPARE_UNRECOGNIZED_STATEMENT):
             printf("Unrecognized keyword at start of '%s'. \n", input_buffer->buffer);
             continue;
+        
       }
 
       switch(execute_statement(&statement, table)){
